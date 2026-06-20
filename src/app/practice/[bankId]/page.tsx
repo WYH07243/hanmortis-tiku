@@ -83,6 +83,7 @@ export default function PracticeSessionPage() {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState("");
   const [aiExplain, setAiExplain] = useState<AiExplainResult | null>(null);
+  const [showAiFull, setShowAiFull] = useState(false);
 
   useEffect(() => {
     fetch(`/api/questions/banks/${bankId}`)
@@ -114,6 +115,7 @@ export default function PracticeSessionPage() {
     setAiLoading(false);
     setAiError("");
     setAiExplain(null);
+    setShowAiFull(false);
   }, []);
 
   const handleSubmit = useCallback(async () => {
@@ -184,6 +186,11 @@ export default function PracticeSessionPage() {
   const handleAskAi = async () => {
     if (!currentQuestion || aiLoading) return;
 
+    if (aiExplain) {
+      setShowAiFull(true);
+      return;
+    }
+
     setAiLoading(true);
     setAiError("");
 
@@ -211,6 +218,7 @@ export default function PracticeSessionPage() {
         throw new Error(data.error || "AI 解答暂时不可用");
       }
       setAiExplain(data);
+      setShowAiFull(false);
     } catch (err: any) {
       setAiError(err.message || "AI 解答暂时不可用");
     } finally {
@@ -456,7 +464,7 @@ export default function PracticeSessionPage() {
             className="border-indigo-500/20 bg-indigo-500/5 text-indigo-300 hover:bg-indigo-500/10"
           >
             <Sparkles className="w-4 h-4" />
-            {aiLoading ? "AI 正在整理思路..." : "AI 解答"}
+            {aiLoading ? "AI 正在整理提示..." : aiExplain ? "展开完整解答" : "AI 提示"}
           </Button>
         </div>
 
@@ -470,23 +478,32 @@ export default function PracticeSessionPage() {
           <div className="rounded-xl border border-sky-500/20 bg-sky-500/10 p-5 text-sm text-slate-200 space-y-4">
             <div className="flex items-center gap-2 text-sky-300 font-medium">
               <Sparkles className="w-4 h-4" />
-              AI 解答
+              {showAiFull ? "AI 完整解答" : "AI 提示"}
             </div>
-            <p className="leading-7">{aiExplain.summary}</p>
-            {aiExplain.steps.length > 0 && (
-              <div>
-                <p className="mb-2 text-sky-200 font-medium">拆题步骤</p>
-                <ul className="list-disc pl-5 space-y-2 text-slate-300">
-                  {aiExplain.steps.map((step, index) => (
-                    <li key={`${index}-${step}`}>{step}</li>
-                  ))}
-                </ul>
-              </div>
+            {!showAiFull ? (
+              <>
+                <p className="leading-7">{aiExplain.answerFocus}</p>
+                <p className="text-slate-300 leading-7">{aiExplain.summary}</p>
+              </>
+            ) : (
+              <>
+                <p className="leading-7">{aiExplain.summary}</p>
+                {aiExplain.steps.length > 0 && (
+                  <div>
+                    <p className="mb-2 text-sky-200 font-medium">拆题步骤</p>
+                    <ul className="list-disc pl-5 space-y-2 text-slate-300">
+                      {aiExplain.steps.map((step, index) => (
+                        <li key={`${index}-${step}`}>{step}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                <div>
+                  <p className="mb-2 text-sky-200 font-medium">答题抓手</p>
+                  <p className="leading-7 text-slate-300">{aiExplain.answerFocus}</p>
+                </div>
+              </>
             )}
-            <div>
-              <p className="mb-2 text-sky-200 font-medium">答题抓手</p>
-              <p className="leading-7 text-slate-300">{aiExplain.answerFocus}</p>
-            </div>
           </div>
         )}
       </div>
