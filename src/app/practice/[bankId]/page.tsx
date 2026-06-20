@@ -39,6 +39,7 @@ interface AiExplainResult {
   summary: string;
   steps: string[];
   answerFocus: string;
+  mode?: "hint" | "full";
 }
 
 const typeLabels: Record<string, string> = {
@@ -183,42 +184,50 @@ export default function PracticeSessionPage() {
     }
   };
 
+  const requestAiExplain = async (mode: "hint" | "full") => {
+    const res = await fetch("/api/practice/ai-explain", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        mode,
+        question: currentQuestion,
+        userAnswer:
+          currentQuestion?.type === "CHOICE"
+            ? { selectedIndex: selectedChoice }
+            : currentQuestion?.type === "TRUE_FALSE"
+              ? { value: trueFalseValue }
+              : currentQuestion?.type === "SHORT_ANSWER"
+                ? { text: shortAnswerText }
+                : { value: calculationValue },
+        submitted,
+        correctAnswer,
+      }),
+    });
+
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || "AI 解答暂时不可用");
+    }
+
+    return data as AiExplainResult;
+  };
+
   const handleAskAi = async () => {
     if (!currentQuestion || aiLoading) return;
-
-    if (aiExplain) {
-      setShowAiFull(true);
-      return;
-    }
 
     setAiLoading(true);
     setAiError("");
 
     try {
-      const res = await fetch("/api/practice/ai-explain", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          question: currentQuestion,
-          userAnswer:
-            currentQuestion.type === "CHOICE"
-              ? { selectedIndex: selectedChoice }
-              : currentQuestion.type === "TRUE_FALSE"
-                ? { value: trueFalseValue }
-                : currentQuestion.type === "SHORT_ANSWER"
-                  ? { text: shortAnswerText }
-                  : { value: calculationValue },
-          submitted,
-          correctAnswer,
-        }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || "AI 解答暂时不可用");
+      if (!aiExplain) {
+        const data = await requestAiExplain("hint");
+        setAiExplain(data);
+        setShowAiFull(false);
+      } else if (!showAiFull) {
+        const data = await requestAiExplain("full");
+        setAiExplain(data);
+        setShowAiFull(true);
       }
-      setAiExplain(data);
-      setShowAiFull(false);
     } catch (err: any) {
       setAiError(err.message || "AI 解答暂时不可用");
     } finally {
@@ -464,7 +473,7 @@ export default function PracticeSessionPage() {
             className="border-indigo-500/20 bg-indigo-500/5 text-indigo-300 hover:bg-indigo-500/10"
           >
             <Sparkles className="w-4 h-4" />
-            {aiLoading ? "AI 正在整理提示..." : aiExplain ? "展开完整解答" : "AI 提示"}
+            {aiLoading ? "AI 正在整理提示..." : showAiFull ? "已展开完整解答" : aiExplain ? "展开完整解答" : "AI 提示"}
           </Button>
         </div>
 
