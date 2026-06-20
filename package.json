@@ -8,7 +8,8 @@
     "postinstall": "npx prisma generate",
     "start": "next start",
     "lint": "eslint",
-    "db:migrate": "node scripts/migrate-turso.js"
+    "db:migrate": "node scripts/migrate-turso.js",
+    "db:cleanup": "node scripts/cleanup-malformed-questions.js"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.11.2",
