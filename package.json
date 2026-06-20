@@ -9,12 +9,17 @@
     "start": "next start",
     "lint": "eslint",
     "db:migrate": "node scripts/migrate-turso.js",
-    "db:cleanup": "node scripts/cleanup-malformed-questions.js"
+    "db:cleanup": "node scripts/cleanup-malformed-questions.js",
+    "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
+    "deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
+    "upload": "opennextjs-cloudflare build && opennextjs-cloudflare upload",
+    "cf-typegen": "wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.11.2",
     "@base-ui/react": "^1.6.0",
     "@libsql/client": "^0.17.4",
+    "@opennextjs/cloudflare": "^1.8.3",
     "@prisma/adapter-libsql": "^7.8.0",
     "@prisma/client": "^7.8.0",
     "bcryptjs": "^3.0.3",
@@ -47,6 +52,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.2.9",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "wrangler": "^4.24.3"
   }
 }
