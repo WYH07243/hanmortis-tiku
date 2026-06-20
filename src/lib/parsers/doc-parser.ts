@@ -22,34 +22,31 @@ const FALSE_ANSWER = /^[\s]*[×✗错错误falseF][\s]*$/i;
 // 难度标记: 【难度】 难度： 难度:
 const DIFFICULTY_PATTERN = /(?:【?\s*难度\s*】?\s*[：:]\s*)([1-5])/i;
 
+const HEADING_HINT_PATTERN = /(题量|满分|作答时间|智能分析|单选题|多选题|判断题|简答题|计算题|共\d+题|第\d+部分|章节|作业)/;
+
 function detectTypeByContent(text: string): QuestionType {
-  // 检查是否有选项 A. B. C. D. 模式
   const optionMatches = text.match(/[A-F][\.、．\)）]\s*\S/g);
   if (optionMatches && optionMatches.length >= 2) {
     return "CHOICE";
   }
 
-  // 检查判断题特征
   if (/[（(]\s*[√✓×✗]\s*[）)]/.test(text) || /判断[对错]/.test(text)) {
     return "TRUE_FALSE";
   }
 
-  // 检查计算题特征
   if (/计算|求解|推导|证明|求\s*\w+|算/.test(text)) {
     return "CALCULATION";
   }
 
-  // 默认简答题
-  if (/简答|问答|论述|简述|简述|说明/.test(text)) {
+  if (/简答|问答|论述|简述|说明/.test(text)) {
     return "SHORT_ANSWER";
   }
 
-  // 有答案标记的一般是简答
   if (ANSWER_PATTERN.test(text)) {
     return "SHORT_ANSWER";
   }
 
-  return "CHOICE"; // 无法确定时默认选择题
+  return "CHOICE";
 }
 
 function extractChoiceOptions(text: string): string[] {
@@ -70,8 +67,7 @@ function extractAnswer(text: string): { answer: string; remaining: string } {
 
   const before = text.substring(0, match.index);
   const after = text.substring(match.index + match[0].length);
-  
-  // 提取答案内容（到行尾或下一个标记之前）
+
   const answerEnd = after.search(/[\n\r]*(?:【|解析|详解|难度)/);
   const answer = answerEnd === -1 ? after.trim() : after.substring(0, answerEnd).trim();
   const remaining = answerEnd === -1 ? "" : after.substring(answerEnd).trim();
@@ -87,7 +83,7 @@ function extractExplanation(text: string): { explanation: string; remaining: str
 
   const before = text.substring(0, match.index);
   const after = text.substring(match.index + match[0].length);
-  
+
   const explEnd = after.search(/[\n\r]*(?:【|难度)/);
   const explanation = explEnd === -1 ? after.trim() : after.substring(0, explEnd).trim();
   const remaining = explEnd === -1 ? "" : after.substring(explEnd).trim();
@@ -98,21 +94,21 @@ function extractExplanation(text: string): { explanation: string; remaining: str
 function extractDifficulty(text: string): { difficulty: number; remaining: string } {
   const match = text.match(DIFFICULTY_PATTERN);
   if (!match) return { difficulty: 1, remaining: text };
-  
+
   const remaining = text.replace(DIFFICULTY_PATTERN, "").trim();
   return { difficulty: parseInt(match[1]), remaining };
 }
 
 function cleanStem(text: string): string {
   return text
-    .replace(/^\s*\d+[\.、．\)）题]\s*/, "")  // 去题号
-    .replace(/\s*[（(]\s*[√✓×✗]\s*[）)]/, "")  // 去判断标记
-    .replace(/\s*（\s*）/g, "（ ）")             // 填空题空格保留
+    .replace(/^\s*\d+[\.、．\)）题]\s*/, "")
+    .replace(/\s*[（(]\s*[√✓×✗]\s*[）)]/, "")
+    .replace(/\s*（\s*）/g, "（ ）")
+    .replace(/\s+/g, " ")
     .trim();
 }
 
 function splitQuestions(text: string): string[] {
-  // 按题号拆分
   const questions: string[] = [];
   const lines = text.split(/\n\r?|\r\n?/);
   let currentQuestion = "";
@@ -124,9 +120,8 @@ function splitQuestions(text: string): string[] {
       continue;
     }
 
-    // 检测新题开始
     const isNewQuestion = /^\s*(?:第\s*)?\d+\s*[\.、．\)）题]\s*/.test(trimmed);
-    
+
     if (isNewQuestion && currentQuestion.trim()) {
       questions.push(currentQuestion.trim());
       currentQuestion = trimmed;
@@ -142,27 +137,45 @@ function splitQuestions(text: string): string[] {
   return questions;
 }
 
+function isStructuralHeading(stem: string, answerStr: string, options: string[]): boolean {
+  if (!stem) return true;
+
+  const compactStem = stem.replace(/\s+/g, "");
+  if (HEADING_HINT_PATTERN.test(stem) && !answerStr.trim() && options.length === 0) {
+    return true;
+  }
+
+  if (/^作业[（(]\d+-\d+[)）]/.test(compactStem)) {
+    return true;
+  }
+
+  if (/^(一|二|三|四|五|六|七|八|九|十)[、.．]/.test(stem) && !answerStr.trim() && options.length === 0) {
+    return true;
+  }
+
+  return false;
+}
+
 function parseOneQuestion(text: string): ParsedQuestion | null {
   let remaining = text.trim();
   if (!remaining) return null;
 
-  // 提取难度
   const { difficulty, remaining: r1 } = extractDifficulty(remaining);
   remaining = r1;
 
-  // 提取解析
   const { explanation, remaining: r2 } = extractExplanation(remaining);
   remaining = r2;
 
-  // 提取答案
   const { answer: answerStr, remaining: r3 } = extractAnswer(remaining);
   remaining = r3;
 
-  // 检测题型
   const type = detectTypeByContent(remaining);
-
-  // 清理题干
   const stem = cleanStem(remaining);
+  const options = type === "CHOICE" ? extractChoiceOptions(remaining) : [];
+
+  if (isStructuralHeading(stem, answerStr, options)) {
+    return null;
+  }
 
   const question: ParsedQuestion = {
     type,
@@ -172,12 +185,14 @@ function parseOneQuestion(text: string): ParsedQuestion | null {
     difficulty,
   };
 
-  // 根据题型构建答案
   switch (type) {
     case "CHOICE": {
-      const options = extractChoiceOptions(remaining);
+      if (options.length < 2 || !answerStr.trim()) {
+        return null;
+      }
+
       (question.content.data as any).options = options;
-      
+
       const ans = answerStr.trim().toUpperCase();
       const labelMatch = ans.match(/^([A-F])$/);
       if (labelMatch) {
@@ -189,21 +204,26 @@ function parseOneQuestion(text: string): ParsedQuestion | null {
           },
         };
       } else {
-        // 尝试从答案文本匹配选项
         const idx = options.findIndex(
           (opt) => opt.trim() === ans || ans.includes(opt.trim())
         );
+        if (idx < 0) {
+          return null;
+        }
         question.answer = {
           type: "CHOICE",
           data: {
-            correctIndex: Math.max(0, idx),
-            correctLabel: String.fromCharCode(65 + Math.max(0, idx)),
+            correctIndex: idx,
+            correctLabel: String.fromCharCode(65 + idx),
           },
         };
       }
       break;
     }
     case "TRUE_FALSE": {
+      if (!answerStr.trim() || (!TRUE_FALSE_ANSWER.test(answerStr) && !FALSE_ANSWER.test(answerStr))) {
+        return null;
+      }
       const correct = TRUE_FALSE_ANSWER.test(answerStr);
       question.answer = {
         type: "TRUE_FALSE",
@@ -212,7 +232,10 @@ function parseOneQuestion(text: string): ParsedQuestion | null {
       break;
     }
     case "SHORT_ANSWER": {
-      const refAnswer = answerStr || "";
+      const refAnswer = answerStr.trim();
+      if (!refAnswer) {
+        return null;
+      }
       question.answer = {
         type: "SHORT_ANSWER",
         data: {
@@ -223,9 +246,13 @@ function parseOneQuestion(text: string): ParsedQuestion | null {
       break;
     }
     case "CALCULATION": {
+      const value = answerStr.trim();
+      if (!value) {
+        return null;
+      }
       question.answer = {
         type: "CALCULATION",
-        data: { value: answerStr || "" },
+        data: { value },
       };
       break;
     }
@@ -242,9 +269,8 @@ export function parsePlainText(text: string): ParseResult {
     totalProcessed: 0,
   };
 
-  // 移除页码等噪音
   const cleaned = text
-    .replace(/^\s*\d+\s*\/\s*\d+\s*$/gm, "")  // 页码
+    .replace(/^\s*\d+\s*\/\s*\d+\s*$/gm, "")
     .replace(/第\s*\d+\s*页/g, "");
 
   const parts = splitQuestions(cleaned);
@@ -275,12 +301,11 @@ export async function parseDocx(buffer: ArrayBuffer): Promise<ParseResult> {
 }
 
 export async function parsePdf(buffer: ArrayBuffer): Promise<ParseResult> {
-  // pdfjs-dist 需要动态导入（ESM）
   const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
-  
+
   const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(buffer) });
   const pdf = await loadingTask.promise;
-  
+
   const pages: string[] = [];
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i);
