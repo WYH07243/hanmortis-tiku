@@ -9,16 +9,15 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { Separator } from "@/components/ui/separator";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
   ChevronLeft,
   ChevronRight,
   CheckCircle,
   XCircle,
   Lightbulb,
-  Clock,
   RotateCcw,
+  Sparkles,
+  Keyboard,
 } from "lucide-react";
 
 interface Question {
@@ -34,6 +33,12 @@ interface BankInfo {
   id: string;
   name: string;
   description: string | null;
+}
+
+interface AiExplainResult {
+  summary: string;
+  steps: string[];
+  answerFocus: string;
 }
 
 const typeLabels: Record<string, string> = {
@@ -60,25 +65,25 @@ export default function PracticeSessionPage() {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [skippedCount, setSkippedCount] = useState(0);
 
-  // 答题状态
   const [selectedChoice, setSelectedChoice] = useState<number | null>(null);
   const [trueFalseValue, setTrueFalseValue] = useState<boolean | null>(null);
   const [shortAnswerText, setShortAnswerText] = useState("");
   const [calculationValue, setCalculationValue] = useState("");
 
-  // 提交状态
   const [submitted, setSubmitted] = useState(false);
   const [isCorrect, setIsCorrect] = useState(false);
   const [correctAnswer, setCorrectAnswer] = useState<any>(null);
-  const [showExplanation, setShowExplanation] = useState(false);
 
-  // 统计
   const [correctCount, setCorrectCount] = useState(0);
   const [answeredCount, setAnsweredCount] = useState(0);
   const [startTime, setStartTime] = useState(Date.now());
 
-  // 加载题目
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState("");
+  const [aiExplain, setAiExplain] = useState<AiExplainResult | null>(null);
+
   useEffect(() => {
     fetch(`/api/questions/banks/${bankId}`)
       .then((res) => res.json())
@@ -88,6 +93,7 @@ export default function PracticeSessionPage() {
         } else {
           setBank(data.bank);
           setQuestions(data.questions);
+          setSkippedCount(data.skipped || 0);
         }
       })
       .catch(() => setError("网络错误"))
@@ -97,7 +103,6 @@ export default function PracticeSessionPage() {
   const currentQuestion = questions[currentIndex];
   const progress = questions.length > 0 ? ((currentIndex + 1) / questions.length) * 100 : 0;
 
-  // 重置答题状态
   const resetAnswerState = useCallback(() => {
     setSelectedChoice(null);
     setTrueFalseValue(null);
@@ -106,11 +111,12 @@ export default function PracticeSessionPage() {
     setSubmitted(false);
     setIsCorrect(false);
     setCorrectAnswer(null);
-    setShowExplanation(false);
+    setAiLoading(false);
+    setAiError("");
+    setAiExplain(null);
   }, []);
 
-  // 提交答案
-  const handleSubmit = async () => {
+  const handleSubmit = useCallback(async () => {
     if (!currentQuestion || submitted) return;
 
     let userAnswer: any;
@@ -131,6 +137,8 @@ export default function PracticeSessionPage() {
         if (!calculationValue.trim()) return;
         userAnswer = { value: calculationValue };
         break;
+      default:
+        return;
     }
 
     const timeSpent = Math.floor((Date.now() - startTime) / 1000);
@@ -156,18 +164,16 @@ export default function PracticeSessionPage() {
     } catch {
       setError("提交失败");
     }
-  };
+  }, [calculationValue, currentQuestion, selectedChoice, shortAnswerText, startTime, submitted, trueFalseValue]);
 
-  // 下一题
-  const handleNext = () => {
+  const handleNext = useCallback(() => {
     if (currentIndex < questions.length - 1) {
       resetAnswerState();
       setCurrentIndex((i) => i + 1);
       setStartTime(Date.now());
     }
-  };
+  }, [currentIndex, questions.length, resetAnswerState]);
 
-  // 上一题
   const handlePrev = () => {
     if (currentIndex > 0) {
       resetAnswerState();
@@ -175,7 +181,88 @@ export default function PracticeSessionPage() {
     }
   };
 
-  // 渲染题目内容
+  const handleAskAi = async () => {
+    if (!currentQuestion || aiLoading) return;
+
+    setAiLoading(true);
+    setAiError("");
+
+    try {
+      const res = await fetch("/api/practice/ai-explain", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          question: currentQuestion,
+          userAnswer:
+            currentQuestion.type === "CHOICE"
+              ? { selectedIndex: selectedChoice }
+              : currentQuestion.type === "TRUE_FALSE"
+                ? { value: trueFalseValue }
+                : currentQuestion.type === "SHORT_ANSWER"
+                  ? { text: shortAnswerText }
+                  : { value: calculationValue },
+          submitted,
+          correctAnswer,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "AI 解答暂时不可用");
+      }
+      setAiExplain(data);
+    } catch (err: any) {
+      setAiError(err.message || "AI 解答暂时不可用");
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!currentQuestion) return;
+
+    const handler = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const typing = target && ["INPUT", "TEXTAREA"].includes(target.tagName);
+      if (typing) return;
+
+      if (currentQuestion.type === "CHOICE" && !submitted) {
+        const key = event.key.toUpperCase();
+        const optionIndex = ["A", "B", "C", "D", "E", "F"].indexOf(key);
+        if (optionIndex >= 0 && optionIndex < (currentQuestion.content?.data?.options?.length || 0)) {
+          event.preventDefault();
+          setSelectedChoice(optionIndex);
+          return;
+        }
+      }
+
+      if (currentQuestion.type === "TRUE_FALSE" && !submitted) {
+        if (event.key.toLowerCase() === "t") {
+          event.preventDefault();
+          setTrueFalseValue(true);
+          return;
+        }
+        if (event.key.toLowerCase() === "f") {
+          event.preventDefault();
+          setTrueFalseValue(false);
+          return;
+        }
+      }
+
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        if (submitted) {
+          handleNext();
+        } else {
+          void handleSubmit();
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [currentQuestion, handleNext, handleSubmit, submitted]);
+
   const renderQuestionContent = () => {
     if (!currentQuestion) return null;
     const { type, content } = currentQuestion;
@@ -183,28 +270,26 @@ export default function PracticeSessionPage() {
 
     return (
       <div className="space-y-6">
-        {/* 题型标签 */}
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <Badge className={typeColors[type] || "bg-gray-500/20 text-gray-400"}>
             {typeLabels[type] || type}
           </Badge>
           <Badge variant="outline" className="border-white/10 text-gray-500">
-            难度: {"⭐".repeat(data.difficulty || 1)}
+            难度: {"⭐".repeat(currentQuestion.difficulty || 1)}
           </Badge>
+          {currentQuestion.tags?.length > 0 && currentQuestion.tags.map((tag) => (
+            <Badge key={tag} variant="outline" className="border-white/10 text-gray-500">
+              {tag}
+            </Badge>
+          ))}
         </div>
 
-        {/* 题干 */}
         <div className="text-lg text-white leading-relaxed font-medium">
           {currentIndex + 1}. {data.stem}
         </div>
 
-        {/* 选择题选项 */}
         {type === "CHOICE" && data.options && (
-          <RadioGroup
-            value={selectedChoice !== null ? String(selectedChoice) : undefined}
-            onValueChange={(v) => setSelectedChoice(parseInt(v))}
-            className="space-y-3"
-          >
+          <div className="space-y-3">
             {data.options.map((option: string, i: number) => {
               const label = String.fromCharCode(65 + i);
               const isSelected = selectedChoice === i;
@@ -224,33 +309,37 @@ export default function PracticeSessionPage() {
                   className={`flex items-center gap-4 p-4 rounded-xl border cursor-pointer transition-all ${optionClass}`}
                   onClick={() => !submitted && setSelectedChoice(i)}
                 >
-                  <div className={`
-                    w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium shrink-0
-                    ${isSelected && !submitted ? "bg-indigo-500 text-white" : "bg-white/5 text-gray-400"}
-                    ${submitted && i === correctAnswer?.data?.correctIndex ? "bg-green-500 text-white" : ""}
-                    ${submitted && isSelected && !isCorrect ? "bg-red-500 text-white" : ""}
-                  `}>
+                  <div
+                    className={`
+                      w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium shrink-0
+                      ${isSelected && !submitted ? "bg-indigo-500 text-white" : "bg-white/5 text-gray-400"}
+                      ${submitted && i === correctAnswer?.data?.correctIndex ? "bg-green-500 text-white" : ""}
+                      ${submitted && isSelected && !isCorrect ? "bg-red-500 text-white" : ""}
+                    `}
+                  >
                     {label}
                   </div>
                   <span className="text-gray-200">{option}</span>
+                  <Badge variant="outline" className="ml-auto border-white/10 text-gray-500">
+                    {label}
+                  </Badge>
                   {submitted && i === correctAnswer?.data?.correctIndex && (
-                    <CheckCircle className="w-5 h-5 text-green-400 ml-auto" />
+                    <CheckCircle className="w-5 h-5 text-green-400" />
                   )}
                   {submitted && isSelected && !isCorrect && (
-                    <XCircle className="w-5 h-5 text-red-400 ml-auto" />
+                    <XCircle className="w-5 h-5 text-red-400" />
                   )}
                 </div>
               );
             })}
-          </RadioGroup>
+          </div>
         )}
 
-        {/* 判断题 */}
         {type === "TRUE_FALSE" && (
           <div className="flex gap-4">
             {[
-              { value: true, label: "✓ 正确" },
-              { value: false, label: "✗ 错误" },
+              { value: true, label: "✓ 正确", keyHint: "T" },
+              { value: false, label: "✗ 错误", keyHint: "F" },
             ].map((opt) => {
               const isSelected = trueFalseValue === opt.value;
               let btnClass = "border-white/10 hover:bg-white/5";
@@ -271,20 +360,16 @@ export default function PracticeSessionPage() {
                   onClick={() => setTrueFalseValue(opt.value)}
                   className={`flex-1 h-16 text-lg ${btnClass} ${isSelected ? "" : "text-gray-400"}`}
                 >
-                  {submitted && opt.value === correctAnswer?.data?.correct && (
-                    <CheckCircle className="w-5 h-5 mr-2" />
-                  )}
-                  {submitted && isSelected && !isCorrect && (
-                    <XCircle className="w-5 h-5 mr-2" />
-                  )}
-                  {opt.label}
+                  <span>{opt.label}</span>
+                  <Badge variant="outline" className="border-white/10 text-gray-500">
+                    {opt.keyHint}
+                  </Badge>
                 </Button>
               );
             })}
           </div>
         )}
 
-        {/* 简答题 */}
         {type === "SHORT_ANSWER" && (
           <div className="space-y-3">
             <textarea
@@ -298,7 +383,6 @@ export default function PracticeSessionPage() {
           </div>
         )}
 
-        {/* 计算题 */}
         {type === "CALCULATION" && (
           <div className="space-y-3">
             <Label className="text-gray-300">你的答案</Label>
@@ -312,7 +396,6 @@ export default function PracticeSessionPage() {
           </div>
         )}
 
-        {/* 提交后显示正确答案和解析 */}
         {submitted && (
           <div className="space-y-4">
             <div className={`p-4 rounded-xl ${isCorrect ? "bg-green-500/10 border border-green-500/20" : "bg-red-500/10 border border-red-500/20"}`}>
@@ -327,21 +410,19 @@ export default function PracticeSessionPage() {
                 </span>
               </div>
 
-              {/* 显示正确答案 */}
               {!isCorrect && correctAnswer && (
                 <div className="mt-3">
                   <p className="text-sm text-gray-400 mb-1">正确答案：</p>
                   <p className="text-green-400 font-medium">
-                    {currentQuestion.type === "CHOICE" && correctAnswer.data.correctLabel + ". " + currentQuestion.content.data.options?.[correctAnswer.data.correctIndex]}
+                    {currentQuestion.type === "CHOICE" && `${correctAnswer.data.correctLabel}. ${currentQuestion.content.data.options?.[correctAnswer.data.correctIndex]}`}
                     {currentQuestion.type === "TRUE_FALSE" && (correctAnswer.data.correct ? "正确 ✓" : "错误 ✗")}
                     {currentQuestion.type === "SHORT_ANSWER" && correctAnswer.data.referenceAnswer}
-                    {currentQuestion.type === "CALCULATION" && correctAnswer.data.value + (correctAnswer.data.unit || "")}
+                    {currentQuestion.type === "CALCULATION" && `${correctAnswer.data.value}${correctAnswer.data.unit || ""}`}
                   </p>
                 </div>
               )}
             </div>
 
-            {/* 解析 */}
             {currentQuestion.explanation && (
               <div className="p-4 rounded-xl bg-indigo-500/5 border border-indigo-500/10">
                 <div className="flex items-center gap-2 mb-2">
@@ -351,6 +432,61 @@ export default function PracticeSessionPage() {
                 <p className="text-sm text-gray-300">{currentQuestion.explanation}</p>
               </div>
             )}
+          </div>
+        )}
+
+        <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 text-sm text-gray-400">
+          <div className="mb-2 flex items-center gap-2 text-gray-300">
+            <Keyboard className="h-4 w-4" />
+            快捷操作
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Badge variant="outline" className="border-white/10 text-gray-500">Enter 提交/下一题</Badge>
+            {type === "CHOICE" && <Badge variant="outline" className="border-white/10 text-gray-500">A-F 选择选项</Badge>}
+            {type === "TRUE_FALSE" && <Badge variant="outline" className="border-white/10 text-gray-500">T/F 判断对错</Badge>}
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-3">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={handleAskAi}
+            disabled={aiLoading}
+            className="border-indigo-500/20 bg-indigo-500/5 text-indigo-300 hover:bg-indigo-500/10"
+          >
+            <Sparkles className="w-4 h-4" />
+            {aiLoading ? "AI 正在整理思路..." : "AI 解答"}
+          </Button>
+        </div>
+
+        {aiError && (
+          <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 p-4 text-sm text-amber-200">
+            {aiError}
+          </div>
+        )}
+
+        {aiExplain && (
+          <div className="rounded-xl border border-sky-500/20 bg-sky-500/10 p-5 text-sm text-slate-200 space-y-4">
+            <div className="flex items-center gap-2 text-sky-300 font-medium">
+              <Sparkles className="w-4 h-4" />
+              AI 解答
+            </div>
+            <p className="leading-7">{aiExplain.summary}</p>
+            {aiExplain.steps.length > 0 && (
+              <div>
+                <p className="mb-2 text-sky-200 font-medium">拆题步骤</p>
+                <ul className="list-disc pl-5 space-y-2 text-slate-300">
+                  {aiExplain.steps.map((step, index) => (
+                    <li key={`${index}-${step}`}>{step}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            <div>
+              <p className="mb-2 text-sky-200 font-medium">答题抓手</p>
+              <p className="leading-7 text-slate-300">{aiExplain.answerFocus}</p>
+            </div>
           </div>
         )}
       </div>
@@ -400,7 +536,6 @@ export default function PracticeSessionPage() {
     );
   }
 
-  // 完成所有题目
   if (answeredCount >= questions.length && currentIndex === questions.length - 1 && submitted) {
     const accuracy = answeredCount > 0 ? Math.round((correctCount / answeredCount) * 100) : 0;
     return (
@@ -439,10 +574,7 @@ export default function PracticeSessionPage() {
                   <RotateCcw className="w-4 h-4" />
                   再练一次
                 </Button>
-                <Button
-                  onClick={() => router.push("/practice")}
-                  className="flex-1 gap-2"
-                >
+                <Button onClick={() => router.push("/practice")} className="flex-1 gap-2">
                   返回列表
                 </Button>
               </div>
@@ -458,8 +590,7 @@ export default function PracticeSessionPage() {
       <Navbar />
       <main className="md:ml-64 pt-16 md:pt-0">
         <div className="max-w-3xl mx-auto p-6 md:p-8 space-y-6">
-          {/* 顶部信息 */}
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-4">
             <Button
               variant="ghost"
               onClick={() => router.push("/practice")}
@@ -480,7 +611,12 @@ export default function PracticeSessionPage() {
             </div>
           </div>
 
-          {/* 进度条 */}
+          {skippedCount > 0 && (
+            <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+              已自动跳过 {skippedCount} 道异常题目，避免影响练习流程。
+            </div>
+          )}
+
           <div className="space-y-2">
             <div className="flex justify-between text-sm text-gray-500">
               <span>第 {currentIndex + 1} / {questions.length} 题</span>
@@ -489,14 +625,10 @@ export default function PracticeSessionPage() {
             <Progress value={progress} className="h-1.5" />
           </div>
 
-          {/* 题目卡片 */}
           <Card className="bg-white/5 border-white/10 backdrop-blur-sm">
-            <CardContent className="p-6 md:p-8">
-              {renderQuestionContent()}
-            </CardContent>
+            <CardContent className="p-6 md:p-8">{renderQuestionContent()}</CardContent>
           </Card>
 
-          {/* 操作按钮 */}
           <div className="flex gap-3">
             <Button
               variant="outline"
@@ -510,7 +642,7 @@ export default function PracticeSessionPage() {
 
             {!submitted ? (
               <Button
-                onClick={handleSubmit}
+                onClick={() => void handleSubmit()}
                 className="flex-1 gap-2 bg-gradient-to-r from-indigo-500 to-purple-600"
               >
                 提交答案
