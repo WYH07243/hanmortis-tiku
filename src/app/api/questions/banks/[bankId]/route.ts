@@ -6,30 +6,47 @@ export const runtime = "nodejs";
 
 const HEADING_HINT_PATTERN = /(题量|满分|作答时间|智能分析|单选题|多选题|判断题|简答题|计算题|共\d+题|第\d+部分|章节|作业)/;
 
+function normalizeJson(value: any) {
+  if (typeof value === "string") {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  return value;
+}
+
 function isRenderableQuestion(question: {
   type: string;
   content: any;
   answer: any;
 }) {
-  const stem = question?.content?.data?.stem?.trim?.() || "";
-  if (!stem) return false;
+  const content = normalizeJson(question.content);
+  const answer = normalizeJson(question.answer);
+  const stem = content?.data?.stem?.trim?.() || "";
 
-  if (HEADING_HINT_PATTERN.test(stem) && !question?.answer?.data?.referenceAnswer) {
-    return false;
-  }
+  if (!stem) return false;
 
   switch (question.type) {
     case "CHOICE": {
-      const options = question?.content?.data?.options;
-      const correctIndex = question?.answer?.data?.correctIndex;
-      return Array.isArray(options) && options.length >= 2 && Number.isInteger(correctIndex);
+      const options = content?.data?.options;
+      const correctIndexRaw = answer?.data?.correctIndex;
+      const correctIndex = Number(correctIndexRaw);
+      const hasOptions = Array.isArray(options) && options.filter(Boolean).length >= 2;
+      const looksLikeHeading = HEADING_HINT_PATTERN.test(stem) && !hasOptions;
+      if (looksLikeHeading) return false;
+      return hasOptions && Number.isFinite(correctIndex);
     }
     case "TRUE_FALSE":
-      return typeof question?.answer?.data?.correct === "boolean";
-    case "SHORT_ANSWER":
-      return Boolean(question?.answer?.data?.referenceAnswer?.trim?.());
+      return typeof answer?.data?.correct === "boolean";
+    case "SHORT_ANSWER": {
+      const referenceAnswer = answer?.data?.referenceAnswer?.trim?.() || "";
+      if (referenceAnswer) return true;
+      return !HEADING_HINT_PATTERN.test(stem);
+    }
     case "CALCULATION":
-      return Boolean(question?.answer?.data?.value?.toString?.().trim?.());
+      return Boolean(String(answer?.data?.value || "").trim());
     default:
       return false;
   }
@@ -80,7 +97,7 @@ export async function GET(
       questions: validQuestions.map((q) => ({
         id: q.id,
         type: q.type,
-        content: q.content,
+        content: normalizeJson(q.content),
         explanation: q.explanation,
         difficulty: q.difficulty,
         tags: JSON.parse(q.tags || "[]"),
