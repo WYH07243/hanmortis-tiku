@@ -18,6 +18,7 @@ import {
   RotateCcw,
   Sparkles,
   Keyboard,
+  TimerReset,
 } from "lucide-react";
 
 interface Question {
@@ -56,6 +57,8 @@ const typeColors: Record<string, string> = {
   CALCULATION: "bg-purple-500/20 text-purple-400",
 };
 
+const AUTO_NEXT_KEY = "tiku:auto-next";
+
 export default function PracticeSessionPage() {
   const params = useParams();
   const router = useRouter();
@@ -85,6 +88,8 @@ export default function PracticeSessionPage() {
   const [aiError, setAiError] = useState("");
   const [aiExplain, setAiExplain] = useState<AiExplainResult | null>(null);
   const [showAiFull, setShowAiFull] = useState(false);
+  const [aiCache, setAiCache] = useState<Record<string, { hint?: AiExplainResult; full?: AiExplainResult }>>({});
+  const [autoNextEnabled, setAutoNextEnabled] = useState(false);
 
   useEffect(() => {
     fetch(`/api/questions/banks/${bankId}`)
@@ -102,6 +107,11 @@ export default function PracticeSessionPage() {
       .finally(() => setLoading(false));
   }, [bankId]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    setAutoNextEnabled(window.localStorage.getItem(AUTO_NEXT_KEY) === "1");
+  }, []);
+
   const currentQuestion = questions[currentIndex];
   const progress = questions.length > 0 ? ((currentIndex + 1) / questions.length) * 100 : 0;
 
@@ -118,6 +128,26 @@ export default function PracticeSessionPage() {
     setAiExplain(null);
     setShowAiFull(false);
   }, []);
+
+  const handleNext = useCallback(() => {
+    if (currentIndex < questions.length - 1) {
+      resetAnswerState();
+      setCurrentIndex((i) => i + 1);
+      setStartTime(Date.now());
+    }
+  }, [currentIndex, questions.length, resetAnswerState]);
+
+  useEffect(() => {
+    if (!submitted || !autoNextEnabled || currentIndex >= questions.length - 1) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      handleNext();
+    }, 1200);
+
+    return () => window.clearTimeout(timer);
+  }, [autoNextEnabled, currentIndex, handleNext, questions.length, submitted]);
 
   const handleSubmit = useCallback(async () => {
     if (!currentQuestion || submitted) return;
@@ -169,14 +199,6 @@ export default function PracticeSessionPage() {
     }
   }, [calculationValue, currentQuestion, selectedChoice, shortAnswerText, startTime, submitted, trueFalseValue]);
 
-  const handleNext = useCallback(() => {
-    if (currentIndex < questions.length - 1) {
-      resetAnswerState();
-      setCurrentIndex((i) => i + 1);
-      setStartTime(Date.now());
-    }
-  }, [currentIndex, questions.length, resetAnswerState]);
-
   const handlePrev = () => {
     if (currentIndex > 0) {
       resetAnswerState();
@@ -215,18 +237,51 @@ export default function PracticeSessionPage() {
   const handleAskAi = async () => {
     if (!currentQuestion || aiLoading) return;
 
-    setAiLoading(true);
+    const cached = aiCache[currentQuestion.id];
     setAiError("");
+
+    if (!aiExplain && cached?.hint) {
+      setAiExplain(cached.hint);
+      setShowAiFull(false);
+      return;
+    }
+
+    if (aiExplain && !showAiFull && cached?.full) {
+      setAiExplain(cached.full);
+      setShowAiFull(true);
+      return;
+    }
+
+    if (showAiFull) {
+      return;
+    }
+
+    setAiLoading(true);
 
     try {
       if (!aiExplain) {
         const data = await requestAiExplain("hint");
         setAiExplain(data);
         setShowAiFull(false);
+        setAiCache((current) => ({
+          ...current,
+          [currentQuestion.id]: {
+            ...current[currentQuestion.id],
+            hint: data,
+          },
+        }));
       } else if (!showAiFull) {
         const data = await requestAiExplain("full");
         setAiExplain(data);
         setShowAiFull(true);
+        setAiCache((current) => ({
+          ...current,
+          [currentQuestion.id]: {
+            ...current[currentQuestion.id],
+            hint: current[currentQuestion.id]?.hint || aiExplain,
+            full: data,
+          },
+        }));
       }
     } catch (err: any) {
       setAiError(err.message || "AI 解答暂时不可用");
@@ -234,6 +289,32 @@ export default function PracticeSessionPage() {
       setAiLoading(false);
     }
   };
+
+  const toggleAutoNext = () => {
+    const next = !autoNextEnabled;
+    setAutoNextEnabled(next);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(AUTO_NEXT_KEY, next ? "1" : "0");
+    }
+  };
+
+  useEffect(() => {
+    if (!currentQuestion) return;
+
+    const cached = aiCache[currentQuestion.id];
+    if (cached?.full && showAiFull) {
+      setAiExplain(cached.full);
+      return;
+    }
+    if (cached?.hint) {
+      setAiExplain(cached.hint);
+      setShowAiFull(false);
+      return;
+    }
+    setAiExplain(null);
+    setShowAiFull(false);
+    setAiError("");
+  }, [aiCache, currentQuestion, showAiFull]);
 
   useEffect(() => {
     if (!currentQuestion) return;
@@ -452,8 +533,8 @@ export default function PracticeSessionPage() {
           </div>
         )}
 
-        <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 text-sm text-gray-400">
-          <div className="mb-2 flex items-center gap-2 text-gray-300">
+        <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 text-sm text-gray-400 space-y-3">
+          <div className="flex items-center gap-2 text-gray-300">
             <Keyboard className="h-4 w-4" />
             快捷操作
           </div>
@@ -462,6 +543,14 @@ export default function PracticeSessionPage() {
             {type === "CHOICE" && <Badge variant="outline" className="border-white/10 text-gray-500">A-F 选择选项</Badge>}
             {type === "TRUE_FALSE" && <Badge variant="outline" className="border-white/10 text-gray-500">T/F 判断对错</Badge>}
           </div>
+          <button
+            type="button"
+            onClick={toggleAutoNext}
+            className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors ${autoNextEnabled ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300" : "border-white/10 bg-transparent text-gray-400 hover:text-white"}`}
+          >
+            <TimerReset className="h-4 w-4" />
+            提交后自动下一题：{autoNextEnabled ? "开启" : "关闭"}
+          </button>
         </div>
 
         <div className="flex flex-wrap gap-3">
@@ -469,11 +558,11 @@ export default function PracticeSessionPage() {
             type="button"
             variant="outline"
             onClick={handleAskAi}
-            disabled={aiLoading}
+            disabled={aiLoading || showAiFull}
             className="border-indigo-500/20 bg-indigo-500/5 text-indigo-300 hover:bg-indigo-500/10"
           >
             <Sparkles className="w-4 h-4" />
-            {aiLoading ? "AI 正在整理提示..." : showAiFull ? "已展开完整解答" : aiExplain ? "展开完整解答" : "AI 提示"}
+            {aiLoading ? "AI 正在整理提示..." : showAiFull ? "完整解答已展开" : aiExplain ? "展开完整解答" : "AI 提示"}
           </Button>
         </div>
 
