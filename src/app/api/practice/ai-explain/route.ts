@@ -26,7 +26,16 @@ function formatUserAnswer(question: any, userAnswer: any) {
   }
 }
 
-function buildPrompt(question: any, userAnswer: any, submitted: boolean, correctAnswer: any) {
+function buildHintPrompt(question: any, userAnswer: any) {
+  const stem = question.content?.data?.stem || "";
+  const options = Array.isArray(question.content?.data?.options)
+    ? question.content.data.options.map((option: string, index: number) => `${String.fromCharCode(65 + index)}. ${option}`).join("\n")
+    : "";
+
+  return `你是一个中文题库陪练老师。请只返回 JSON，不要输出 Markdown。\n\n题型：${question.type}\n题干：${stem}\n${options ? `选项：\n${options}\n` : ""}用户作答：${formatUserAnswer(question, userAnswer)}\n\n请返回：\n{\n  \"summary\": \"用 1-2 句提醒这题该抓什么\",\n  \"steps\": [],\n  \"answerFocus\": \"只给一个关键提示，不要直接完整泄露答案\"\n}`;
+}
+
+function buildFullPrompt(question: any, userAnswer: any, submitted: boolean, correctAnswer: any) {
   const stem = question.content?.data?.stem || "";
   const options = Array.isArray(question.content?.data?.options)
     ? question.content.data.options.map((option: string, index: number) => `${String.fromCharCode(65 + index)}. ${option}`).join("\n")
@@ -43,7 +52,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "请先登录" }, { status: 401 });
     }
 
-    const { question, userAnswer, submitted, correctAnswer } = await req.json();
+    const { question, userAnswer, submitted, correctAnswer, mode } = await req.json();
     if (!question?.content?.data?.stem) {
       return NextResponse.json({ error: "题目信息不完整" }, { status: 400 });
     }
@@ -59,6 +68,8 @@ export async function POST(req: Request) {
       );
     }
 
+    const isHintMode = mode !== "full";
+
     const response = await fetch(`${baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
@@ -67,16 +78,21 @@ export async function POST(req: Request) {
       },
       body: JSON.stringify({
         model,
-        temperature: 0.4,
+        temperature: isHintMode ? 0.2 : 0.4,
+        max_tokens: isHintMode ? 220 : 700,
         response_format: { type: "json_object" },
         messages: [
           {
             role: "system",
-            content: "你是一个耐心、简洁、擅长讲题的中文老师。",
+            content: isHintMode
+              ? "你是一个耐心、简洁、擅长提醒思路的中文老师。"
+              : "你是一个耐心、简洁、擅长讲题的中文老师。",
           },
           {
             role: "user",
-            content: buildPrompt(question, userAnswer, submitted, correctAnswer),
+            content: isHintMode
+              ? buildHintPrompt(question, userAnswer)
+              : buildFullPrompt(question, userAnswer, submitted, correctAnswer),
           },
         ],
       }),
@@ -99,6 +115,7 @@ export async function POST(req: Request) {
       summary: parsed.summary || "AI 暂未生成摘要。",
       steps: Array.isArray(parsed.steps) ? parsed.steps.filter(Boolean).slice(0, 5) : [],
       answerFocus: parsed.answerFocus || "请结合题干和标准答案进一步判断。",
+      mode: isHintMode ? "hint" : "full",
     });
   } catch (error) {
     console.error("AI 解答接口异常:", error);
