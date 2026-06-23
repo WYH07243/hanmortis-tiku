@@ -1,6 +1,4 @@
 {
-  "buildCommand": "node -e \"console.log('site cleared')\"",
-  "installCommand": "node -e \"console.log('no install')\"",
   "outputDirectory": "public",
   "cleanUrls": true,
   "rewrites": [
